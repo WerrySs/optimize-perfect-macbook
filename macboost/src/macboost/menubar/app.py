@@ -487,27 +487,29 @@ def start_daemon():
         print(f"MacBoost ya está corriendo (PID: {pid})")
         return
 
-    # Lanzar como proceso completamente desacoplado
+    # Usar nohup para sobrevivir al cierre de terminal SIN perder
+    # acceso al WindowServer de macOS (necesario para el icono de menú).
+    # No usamos setsid/start_new_session porque crean una sesión nueva
+    # desconectada del display server.
     python_exec = sys.executable
+    log_file = APP_DIR / "menubar.log"
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+
     script = (
-        "import os, signal; "
-        "os.setsid(); "
+        "import signal; "
         "signal.signal(signal.SIGHUP, signal.SIG_IGN); "
         "from macboost.menubar.app import run_menubar; "
         "run_menubar()"
     )
 
-    proc = subprocess.Popen(
-        [python_exec, "-c", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+    with open(log_file, "a") as log:
+        proc = subprocess.Popen(
+            [python_exec, "-c", script],
+            stdout=log,
+            stderr=log,
+            stdin=subprocess.DEVNULL,
+        )
 
-    # Guardar PID del proceso hijo
-    APP_DIR.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(proc.pid))
 
     print(f"⚡ MacBoost iniciado en segundo plano (PID: {proc.pid})")
