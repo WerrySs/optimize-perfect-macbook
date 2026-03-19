@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # MacBoost — Instalador Remoto
-# Uso: curl -fsSL https://raw.githubusercontent.com/Axy-Project/optimize-perfect-macbook/main/macboost/scripts/install-remote.sh | bash
+# Uso: curl -fsSL https://raw.githubusercontent.com/WerrySs/optimize-perfect-macbook/main/macboost/scripts/install-remote.sh | bash
 # ============================================================================
 set -e
 
@@ -13,7 +13,7 @@ RED='\033[0;31m'
 DIM='\033[2m'
 NC='\033[0m'
 
-REPO="https://github.com/Axy-Project/optimize-perfect-macbook.git"
+REPO="https://github.com/WerrySs/optimize-perfect-macbook.git"
 
 echo ""
 echo -e "${CYAN}${BOLD}  ⚡ MacBoost — Instalador${NC}"
@@ -122,7 +122,7 @@ if [[ -n "$MACBOOST_BIN" ]]; then
     echo -e "    ${CYAN}macboost menubar start${NC}    Iniciar app en barra de menú"
     echo ""
     echo -e "  ${DIM}Config: ~/.macboost/config.toml${NC}"
-    echo -e "  ${DIM}Desinstalar: curl -fsSL https://raw.githubusercontent.com/Axy-Project/optimize-perfect-macbook/main/macboost/scripts/uninstall.sh | bash${NC}"
+    echo -e "  ${DIM}Desinstalar: curl -fsSL https://raw.githubusercontent.com/WerrySs/optimize-perfect-macbook/main/macboost/scripts/uninstall.sh | bash${NC}"
 else
     echo -e "${GREEN}${BOLD}  ✓ MacBoost instalado${NC}"
     echo -e "${YELLOW}  ⚠ 'macboost' no encontrado en PATH${NC}"
