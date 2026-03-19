@@ -77,16 +77,25 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 echo -e "  ${DIM}[1/4]${NC} Descargando desde GitHub..."
-git clone --quiet --depth 1 "$REPO" "$TMPDIR/macboost-repo" 2>/dev/null
+if ! git clone --quiet --depth 1 "$REPO" "$TMPDIR/macboost-repo"; then
+    echo -e "${RED}  ✗ Error descargando el repositorio${NC}"
+    exit 1
+fi
 
 # ── Instalar ──
 echo -e "  ${DIM}[2/4]${NC} Instalando paquete..."
 cd "$TMPDIR/macboost-repo/macboost"
 
 if $USE_PIPX; then
-    pipx install . --force 2>/dev/null
+    if ! pipx install . --force; then
+        echo -e "${RED}  ✗ Error instalando con pipx${NC}"
+        exit 1
+    fi
 else
-    pip3 install --user --break-system-packages . 2>/dev/null || pip3 install --user . 2>/dev/null || pip3 install . 2>/dev/null
+    if ! pip3 install --user --break-system-packages . 2>/dev/null && ! pip3 install --user . 2>/dev/null && ! pip3 install .; then
+        echo -e "${RED}  ✗ Error instalando con pip${NC}"
+        exit 1
+    fi
 fi
 
 # ── Crear config ──
