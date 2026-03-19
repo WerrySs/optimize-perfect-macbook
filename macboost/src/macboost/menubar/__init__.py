@@ -1,0 +1,1 @@
+"""MacBoost Menu Bar App."""

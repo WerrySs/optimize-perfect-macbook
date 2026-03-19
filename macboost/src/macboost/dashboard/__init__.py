@@ -1,0 +1,1 @@
+"""MacBoost Web Dashboard."""
