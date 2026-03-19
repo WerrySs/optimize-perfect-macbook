@@ -1,7 +1,8 @@
-"""Menu Bar App — Panel visual estilo Healthy con NSPopover + WKWebView."""
+"""Menu Bar App — MacBoost Multi-Tool Panel with tabs, light theme, real app icons."""
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import platform
@@ -18,6 +19,7 @@ from AppKit import (
     NSApplication,
     NSAppearance,
     NSBezierPath,
+    NSBitmapImageRep,
     NSColor,
     NSImage,
     NSPasteboard,
@@ -25,6 +27,7 @@ from AppKit import (
     NSStatusBar,
     NSVariableStatusItemLength,
     NSViewController,
+    NSWorkspace,
 )
 from Foundation import NSMakeRect, NSMakeSize, NSObject, NSTimer
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
@@ -34,14 +37,20 @@ from macboost.core.health import calculate_health_score
 from macboost.core.orchestrator import Orchestrator
 
 PID_FILE = APP_DIR / "menubar.pid"
+APPS_CONFIG = APP_DIR / "quick_launch.json"
 
-QUICK_APPS = [
-    ("Finder", "folder"),
-    ("Safari", "compass"),
-    ("Terminal", "terminal"),
-    ("Notes", "note"),
-    ("Activity Monitor", "chart"),
-    ("System Settings", "gear"),
+AVAILABLE_APPS = [
+    "Finder", "Safari", "Google Chrome", "Firefox", "Arc",
+    "Terminal", "iTerm", "Visual Studio Code", "Xcode",
+    "Notes", "Calendar", "Mail", "Messages", "Music",
+    "Photos", "FaceTime", "Maps", "Reminders", "Weather",
+    "System Settings", "Activity Monitor", "Disk Utility",
+    "Preview", "TextEdit", "Calculator", "App Store",
+    "Shortcuts", "Contacts",
+]
+
+DEFAULT_SELECTED = [
+    "Finder", "Safari", "Terminal", "Notes", "Calculator", "System Settings",
 ]
 
 
@@ -105,6 +114,26 @@ def _get_battery_details() -> tuple[int | None, str]:
         return None, "Unknown"
 
 
+def _is_dark_mode() -> bool:
+    try:
+        r = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
+                           capture_output=True, text=True, timeout=2)
+        return "Dark" in r.stdout
+    except Exception:
+        return False
+
+
+def _get_wifi_ssid() -> str | None:
+    try:
+        r = subprocess.run(["networksetup", "-getairportnetwork", "en0"],
+                           capture_output=True, text=True, timeout=3)
+        if "Current Wi-Fi Network:" in r.stdout:
+            return r.stdout.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
+
 def _notify(title: str, message: str):
     safe_msg = message.replace('"', '\\"').replace("'", "\\'")
     subprocess.Popen(["osascript", "-e",
@@ -129,6 +158,55 @@ def _create_status_icon() -> NSImage:
     return img
 
 
+def _load_selected_apps() -> list[str]:
+    if APPS_CONFIG.exists():
+        try:
+            return json.loads(APPS_CONFIG.read_text())
+        except Exception:
+            pass
+    return list(DEFAULT_SELECTED)
+
+
+def _save_selected_apps(apps: list[str]):
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    APPS_CONFIG.write_text(json.dumps(apps))
+
+
+# ── App Icons ────────────────────────────────────────────────────────────
+
+def _get_app_icon_b64(app_name: str, size: int = 32) -> str:
+    try:
+        ws = NSWorkspace.sharedWorkspace()
+        app_path = ws.fullPathForApplication_(app_name)
+        if not app_path:
+            return ""
+        icon = ws.iconForFile_(app_path)
+        icon.setSize_(NSMakeSize(size, size))
+        tiff = icon.TIFFRepresentation()
+        if not tiff:
+            return ""
+        rep = NSBitmapImageRep.imageRepWithData_(tiff)
+        if not rep:
+            return ""
+        png = rep.representationUsingType_properties_(4, None)
+        if not png:
+            return ""
+        return base64.b64encode(bytes(png)).decode()
+    except Exception:
+        return ""
+
+
+def _get_all_app_icons() -> tuple[dict[str, str], list[str]]:
+    icons = {}
+    installed = []
+    for app in AVAILABLE_APPS:
+        b64 = _get_app_icon_b64(app)
+        if b64:
+            icons[app] = b64
+            installed.append(app)
+    return icons, installed
+
+
 # ── SVG Icons ────────────────────────────────────────────────────────────
 
 _IC = {
@@ -143,12 +221,10 @@ _IC = {
     "search": '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>',
     "copy": '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M2 11V3a1.5 1.5 0 011.5-1.5H11"/></svg>',
     "trash": '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4h12M5 4V2.5a1 1 0 011-1h4a1 1 0 011 1V4M6 7v5M10 7v5"/><path d="M3 4l1 10a1 1 0 001 1h6a1 1 0 001-1l1-10"/></svg>',
-    # Quick launch app icons
-    "folder": '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4v8a1.5 1.5 0 001.5 1.5h9A1.5 1.5 0 0014 12V6a1.5 1.5 0 00-1.5-1.5H8L6.5 3H3.5A1.5 1.5 0 002 4z"/></svg>',
-    "compass": '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="6.5"/><polygon points="10,6 6.5,7.5 6,10 9.5,8.5" fill="currentColor" stroke="none"/></svg>',
-    "terminal": '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M5 7l2 1.5L5 10"/><line x1="9" y1="10" x2="11" y2="10"/></svg>',
-    "note": '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="3" y="1.5" width="10" height="13" rx="1.5"/><line x1="6" y1="5" x2="10" y2="5"/><line x1="6" y1="8" x2="10" y2="8"/><line x1="6" y1="11" x2="8.5" y2="11"/></svg>',
-    "chart": '<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2" y="9" width="2.5" height="5" rx=".5" fill="currentColor" stroke="none" opacity=".6"/><rect x="6.75" y="5" width="2.5" height="9" rx=".5" fill="currentColor" stroke="none" opacity=".8"/><rect x="11.5" y="2" width="2.5" height="12" rx=".5" fill="currentColor" stroke="none"/></svg>',
+    "moon": '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.2 2A6 6 0 0014 9.8 6 6 0 116.2 2z"/></svg>',
+    "lock": '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>',
+    "camera": '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="4" width="13" height="9" rx="2"/><circle cx="8" cy="8.5" r="2.5"/><path d="M5.5 4L6.5 2h3l1 2"/></svg>',
+    "timer": '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1"/><path d="M6.5 1h3"/><path d="M8 1v2"/></svg>',
 }
 
 CIRC = 188.5  # 2*pi*30
@@ -156,267 +232,302 @@ CIRC = 188.5  # 2*pi*30
 
 # ── HTML Panel ───────────────────────────────────────────────────────────
 
-def _build_html(mac_name: str, version: str) -> str:
-    # Build quick launch buttons
-    app_btns = ""
-    for app_name, icon_key in QUICK_APPS:
-        safe = app_name.replace("'", "\\'")
-        app_btns += f'<button class="app-btn" onclick="openApp(\'{safe}\')" title="{app_name}">{_IC[icon_key]}<span>{app_name.split(" ")[0]}</span></button>'
+def _build_html(mac_name: str, version: str, icons: dict, installed: list, selected: list) -> str:
+    icons_json = json.dumps(icons)
+    installed_json = json.dumps(installed)
+    selected_json = json.dumps(selected)
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{
     font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;
-    font-size:13px;color:#f0f0f5;background:transparent;
+    font-size:13px;color:#1d1d1f;background:transparent;
     padding:14px 16px;user-select:none;-webkit-user-select:none;
     -webkit-font-smoothing:antialiased;overflow-y:auto;
 }}
-.ic{{display:inline-flex;align-items:center;color:#a0a0ab;flex-shrink:0;width:20px}}
+.ic{{display:inline-flex;align-items:center;color:#8e8e93;flex-shrink:0;width:20px}}
 
-/* ── Liquid Glass ── */
 .card{{
-    background:rgba(255,255,255,0.07);
-    border:1px solid rgba(255,255,255,0.12);
+    background:rgba(255,255,255,0.55);
+    border:1px solid rgba(0,0,0,0.06);
     border-radius:14px;padding:10px 12px;margin-bottom:8px;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),0 1px 3px rgba(0,0,0,0.08);
-}}
-.card-sm{{
-    background:rgba(255,255,255,0.05);
-    border:1px solid rgba(255,255,255,0.09);
-    border-radius:12px;padding:8px 12px;margin-bottom:8px;
+    box-shadow:0 0.5px 2px rgba(0,0,0,0.04),inset 0 0.5px 0 rgba(255,255,255,0.7);
 }}
 
-/* ── Header ── */
 .hdr{{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}}
 .hdr-l{{display:flex;align-items:center;gap:6px}}
-.hdr-l svg{{color:#a0a0ab}}
-.mac{{font-size:14px;font-weight:600;letter-spacing:-.2px}}
-.badge{{
-    font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;
-    display:inline-flex;align-items:center;gap:4px;letter-spacing:.3px;
-}}
+.hdr-l svg{{color:#8e8e93}}
+.mac{{font-size:14px;font-weight:600;letter-spacing:-.2px;color:#1d1d1f}}
+.badge{{font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;
+    display:inline-flex;align-items:center;gap:4px;letter-spacing:.3px;}}
 .badge svg{{width:6px;height:6px}}
-.badge.g{{background:rgba(48,209,88,.18);color:#30d158;border:1px solid rgba(48,209,88,.25)}}
-.badge.y{{background:rgba(255,214,10,.13);color:#ffd60a;border:1px solid rgba(255,214,10,.2)}}
-.badge.r{{background:rgba(255,69,58,.13);color:#ff453a;border:1px solid rgba(255,69,58,.2)}}
-.sub{{font-size:10px;color:#75757e;margin-bottom:10px}}
+.badge.g{{background:rgba(52,199,89,.12);color:#34C759;border:1px solid rgba(52,199,89,.2)}}
+.badge.y{{background:rgba(255,149,0,.12);color:#FF9500;border:1px solid rgba(255,149,0,.2)}}
+.badge.r{{background:rgba(255,59,48,.12);color:#FF3B30;border:1px solid rgba(255,59,48,.2)}}
+.sub{{font-size:10px;color:#8e8e93;margin-bottom:10px}}
 
-/* ── Sparkline ── */
+.tabs{{display:flex;background:rgba(0,0,0,0.05);border-radius:8px;padding:2px;margin-bottom:10px}}
+.tab-btn{{flex:1;padding:5px 0;border:none;background:none;border-radius:6px;
+    font-size:12px;font-weight:500;color:#636366;cursor:pointer;font-family:inherit;transition:all .2s}}
+.tab-btn.active{{background:rgba(255,255,255,0.85);color:#1d1d1f;font-weight:600;
+    box-shadow:0 1px 3px rgba(0,0,0,0.08)}}
+
 .spark-wrap{{position:relative;height:34px;margin-bottom:4px;border-radius:8px;overflow:hidden;
-    background:rgba(255,255,255,0.025)}}
+    background:rgba(0,0,0,0.025)}}
 .spark-wrap svg{{width:100%;height:100%;display:block}}
-.spark-lbl{{position:absolute;top:4px;right:6px;font-size:10px;color:#75757e}}
+.spark-lbl{{position:absolute;top:4px;right:6px;font-size:10px;color:#8e8e93}}
 
-/* ── Progress bars ── */
 .pbar{{display:flex;align-items:center;gap:8px;padding:3px 0}}
-.pbar .lb{{font-size:12px;color:#a0a0ab;width:52px;display:flex;align-items:center;gap:5px}}
-.pbar .trk{{flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;overflow:hidden}}
+.pbar .lb{{font-size:12px;color:#636366;width:52px;display:flex;align-items:center;gap:5px}}
+.pbar .trk{{flex:1;height:5px;background:rgba(0,0,0,0.06);border-radius:3px;overflow:hidden}}
 .pbar .fill{{height:100%;border-radius:3px;transition:width .6s ease}}
-.pbar .vl{{font-size:11px;color:#d1d1d6;font-variant-numeric:tabular-nums;min-width:36px;text-align:right}}
-.fill.g{{background:linear-gradient(90deg,#30d158,#32d74b)}}
-.fill.y{{background:linear-gradient(90deg,#ffd60a,#ff9f0a)}}
-.fill.r{{background:linear-gradient(90deg,#ff6961,#ff453a)}}
+.pbar .vl{{font-size:11px;color:#3a3a3c;font-variant-numeric:tabular-nums;min-width:36px;text-align:right}}
+.fill.g{{background:linear-gradient(90deg,#007AFF,#5AC8FA)}}
+.fill.y{{background:linear-gradient(90deg,#FF9500,#FFCC00)}}
+.fill.r{{background:linear-gradient(90deg,#FF6961,#FF3B30)}}
 
-/* ── Gauges ── */
 .gauges{{display:flex;gap:8px;margin-bottom:8px}}
-.gauge-card{{
-    flex:1;display:flex;flex-direction:column;align-items:center;
-    background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);
-    border-radius:14px;padding:10px 4px 8px;
-}}
-.gauge-sub{{font-size:10px;color:#75757e;margin-top:2px}}
+.gauge-card{{flex:1;display:flex;flex-direction:column;align-items:center;
+    background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.05);
+    border-radius:14px;padding:10px 4px 8px}}
+.gauge-sub{{font-size:10px;color:#8e8e93;margin-top:2px}}
 
-/* ── Info rows ── */
 .irow{{display:flex;align-items:center;padding:3px 0;font-size:12px}}
-.irow .ic{{color:#75757e}}
-.irow .lb{{flex:1;color:#a0a0ab}}
-.irow .vl{{color:#d1d1d6;font-weight:500;font-variant-numeric:tabular-nums}}
+.irow .ic{{color:#8e8e93}}.irow .lb{{flex:1;color:#636366}}
+.irow .vl{{color:#3a3a3c;font-weight:500;font-variant-numeric:tabular-nums}}
 
-/* ── Actions ── */
-.acts{{display:flex;gap:6px;margin-bottom:8px}}
-.abtn{{
-    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    padding:8px 4px;gap:4px;
-    background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
-    border-radius:12px;color:#d1d1d6;font-size:11px;cursor:pointer;
-    transition:all .15s;font-family:inherit;
-}}
-.abtn svg{{color:#a0a0ab;transition:color .15s}}
-.abtn:hover{{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.16)}}
-.abtn:hover svg{{color:#d1d1d6}}
-.abtn:active{{background:rgba(255,255,255,0.16)}}
+.acts{{display:flex;gap:6px;margin-bottom:4px}}
+.abtn{{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:8px 4px;gap:4px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.06);
+    border-radius:12px;color:#3a3a3c;font-size:11px;cursor:pointer;transition:all .15s;font-family:inherit}}
+.abtn svg{{color:#8e8e93;transition:color .15s}}
+.abtn:hover{{background:rgba(0,0,0,0.06);border-color:rgba(0,0,0,0.1)}}
+.abtn:hover svg{{color:#636366}}.abtn:active{{background:rgba(0,0,0,0.1)}}
 .abtn.running{{opacity:.5;pointer-events:none}}
 
-/* ── Section titles ── */
+.toggles{{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}}
+.toggle{{display:flex;align-items:center;gap:8px;padding:10px 12px;
+    background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.05);
+    border-radius:12px;font-size:12px;color:#3a3a3c;cursor:pointer;transition:all .15s;font-family:inherit}}
+.toggle svg{{color:#8e8e93;transition:color .15s}}
+.toggle:hover{{background:rgba(0,0,0,0.06)}}.toggle:active{{background:rgba(0,0,0,0.1)}}
+.toggle.active{{background:rgba(0,122,255,0.1);border-color:rgba(0,122,255,0.2);color:#007AFF}}
+.toggle.active svg{{color:#007AFF}}
+
+.timer-card{{text-align:center;padding:12px;margin-bottom:8px;
+    background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.05);border-radius:14px}}
+.timer-disp{{font-size:28px;font-weight:300;font-variant-numeric:tabular-nums;
+    color:#1d1d1f;letter-spacing:1px;margin-bottom:8px}}
+.timer-btns{{display:flex;gap:8px;justify-content:center}}
+.timer-b{{padding:5px 16px;border-radius:8px;font-size:12px;cursor:pointer;
+    border:1px solid rgba(0,0,0,0.08);background:rgba(0,0,0,0.03);color:#3a3a3c;
+    font-family:inherit;transition:all .15s}}
+.timer-b:hover{{background:rgba(0,0,0,0.06)}}
+.timer-b.primary{{background:#007AFF;color:#fff;border-color:#007AFF}}
+.timer-b.primary:hover{{background:#0071E3}}
+
 .sec{{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:0 2px}}
-.sec h3{{font-size:11px;font-weight:600;color:#75757e;letter-spacing:.5px;text-transform:uppercase;
+.sec h3{{font-size:11px;font-weight:600;color:#8e8e93;letter-spacing:.5px;text-transform:uppercase;
     display:flex;align-items:center;gap:5px}}
-.sec a{{font-size:10px;color:#0a84ff;cursor:pointer;text-decoration:none}}
+.sec a{{font-size:10px;color:#007AFF;cursor:pointer;text-decoration:none;font-weight:500}}
 .sec a:hover{{text-decoration:underline}}
 
-/* ── Clipboard ── */
-.clips{{max-height:130px;overflow-y:auto;border-radius:10px;
-    background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06)}}
+.clips{{max-height:140px;overflow-y:auto;border-radius:10px;
+    background:rgba(0,0,0,0.02);border:1px solid rgba(0,0,0,0.04)}}
 .clips::-webkit-scrollbar{{width:4px}}
 .clips::-webkit-scrollbar-track{{background:transparent}}
-.clips::-webkit-scrollbar-thumb{{background:rgba(255,255,255,0.12);border-radius:2px}}
-.clip-item{{
-    display:flex;align-items:center;padding:7px 10px;gap:8px;cursor:pointer;
-    border-bottom:1px solid rgba(255,255,255,0.04);transition:background .1s;
-}}
+.clips::-webkit-scrollbar-thumb{{background:rgba(0,0,0,0.12);border-radius:2px}}
+.clip-item{{display:flex;align-items:center;padding:7px 10px;gap:8px;cursor:pointer;
+    border-bottom:1px solid rgba(0,0,0,0.03);transition:background .1s}}
 .clip-item:last-child{{border-bottom:none}}
-.clip-item:hover{{background:rgba(255,255,255,0.06)}}
-.clip-ic{{color:#6e6e78;flex-shrink:0}}
-.clip-ic.url{{color:#0a84ff}}
-.clip-txt{{flex:1;font-size:11px;color:#c8c8cd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
-.clip-time{{font-size:10px;color:#5e5e66;flex-shrink:0}}
-.clip-copy{{color:#5e5e66;flex-shrink:0;opacity:0;transition:opacity .15s}}
+.clip-item:hover{{background:rgba(0,0,0,0.04)}}
+.clip-ic{{color:#8e8e93;flex-shrink:0}}.clip-ic.url{{color:#007AFF}}
+.clip-txt{{flex:1;font-size:11px;color:#3a3a3c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.clip-time{{font-size:10px;color:#aeaeb2;flex-shrink:0}}
+.clip-copy{{color:#aeaeb2;flex-shrink:0;opacity:0;transition:opacity .15s}}
 .clip-item:hover .clip-copy{{opacity:1}}
-.clip-empty{{padding:16px;text-align:center;font-size:11px;color:#5e5e66}}
+.clip-empty{{padding:16px;text-align:center;font-size:11px;color:#aeaeb2}}
 
-/* ── Quick Launch ── */
-.apps-row{{display:flex;gap:6px;justify-content:center;margin-bottom:8px}}
-.app-btn{{
-    display:flex;flex-direction:column;align-items:center;gap:3px;
-    width:50px;padding:6px 2px;
-    background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);
-    border-radius:12px;color:#a0a0ab;font-size:9px;cursor:pointer;
-    transition:all .15s;font-family:inherit;
-}}
-.app-btn svg{{color:#a0a0ab;transition:color .15s}}
-.app-btn:hover{{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.16)}}
-.app-btn:hover svg{{color:#d1d1d6}}
-.app-btn:active{{background:rgba(255,255,255,0.18)}}
+.apps-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}}
+.app-item{{display:flex;flex-direction:column;align-items:center;gap:3px;
+    padding:8px 4px;border-radius:12px;cursor:pointer;transition:all .15s;border:1px solid transparent}}
+.app-item:hover{{background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.04)}}
+.app-item:active{{background:rgba(0,0,0,0.08)}}
+.app-item img{{width:32px;height:32px;border-radius:7px}}
+.app-item span{{font-size:9px;color:#636366;text-align:center;line-height:1.2;
+    max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 
-/* ── Footer ── */
-.ft{{display:flex;justify-content:space-between;padding-top:2px}}
-.ft a{{color:#0a84ff;font-size:11px;cursor:pointer;text-decoration:none;
-    display:flex;align-items:center;gap:4px}}
-.ft a svg{{color:#0a84ff}}
-.ft a:hover{{text-decoration:underline}}
-.ft .quit{{color:#ff453a}}.ft .quit svg{{color:#ff453a}}
+.picker{{position:fixed;top:0;left:0;right:0;bottom:0;
+    background:rgba(245,245,247,0.95);backdrop-filter:blur(20px);
+    z-index:100;padding:14px;overflow-y:auto;display:none}}
+.picker.show{{display:block}}
+.picker-hdr{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}}
+.picker-hdr h3{{font-size:15px;font-weight:600;color:#1d1d1f}}
+.picker-done{{font-size:13px;color:#007AFF;font-weight:600;border:none;background:none;
+    cursor:pointer;font-family:inherit}}
+.picker-done:hover{{text-decoration:underline}}
+.picker-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
+.picker-item{{display:flex;flex-direction:column;align-items:center;gap:4px;
+    padding:8px 4px;border-radius:12px;cursor:pointer;border:2px solid transparent;transition:all .15s}}
+.picker-item.sel{{border-color:#007AFF;background:rgba(0,122,255,0.06)}}
+.picker-item img{{width:36px;height:36px;border-radius:8px}}
+.picker-item span{{font-size:9px;color:#636366;text-align:center;line-height:1.2}}
+
+.ft{{display:flex;justify-content:space-between;padding-top:4px}}
+.ft a{{color:#007AFF;font-size:11px;cursor:pointer;text-decoration:none;
+    display:flex;align-items:center;gap:4px;font-weight:500}}
+.ft a svg{{color:#007AFF}}.ft a:hover{{text-decoration:underline}}
+.ft .quit{{color:#FF3B30}}.ft .quit svg{{color:#FF3B30}}
 </style></head><body>
 
-<!-- Header -->
 <div class="hdr">
     <div class="hdr-l">{_IC['bolt']}<span class="mac">{mac_name}</span></div>
     <span class="badge g" id="badge"><svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Healthy</span>
 </div>
 <div class="sub" id="sub">All key metrics normal &middot; v{version}</div>
 
-<!-- CPU -->
-<div class="card" style="padding:8px 10px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-        <span style="font-size:11px;color:#a0a0ab;display:flex;align-items:center;gap:5px">{_IC['cpu']} CPU</span>
-        <span style="font-size:12px;font-weight:600;font-variant-numeric:tabular-nums" id="cpuV">--%</span>
+<div class="tabs">
+    <button class="tab-btn active" data-tab="monitor" onclick="showTab('monitor')">Monitor</button>
+    <button class="tab-btn" data-tab="tools" onclick="showTab('tools')">Tools</button>
+    <button class="tab-btn" data-tab="apps" onclick="showTab('apps')">Apps</button>
+</div>
+
+<!-- MONITOR -->
+<div id="tab-monitor" class="tab-content">
+    <div class="card" style="padding:8px 10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:11px;color:#636366;display:flex;align-items:center;gap:5px">{_IC['cpu']} CPU</span>
+            <span style="font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:#1d1d1f" id="cpuV">--%</span>
+        </div>
+        <div class="spark-wrap">
+            <svg id="sparkSvg" viewBox="0 0 300 34" preserveAspectRatio="none">
+                <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#007AFF" stop-opacity="0.2"/>
+                    <stop offset="100%" stop-color="#007AFF" stop-opacity="0"/>
+                </linearGradient></defs>
+                <path id="sparkArea" fill="url(#sg)" d="M0 34 L300 34 Z"/>
+                <path id="sparkLine" fill="none" stroke="#007AFF" stroke-width="1.5" d="M0 34"/>
+            </svg>
+            <span class="spark-lbl" id="cpuCores">-- cores</span>
+        </div>
     </div>
-    <div class="spark-wrap">
-        <svg id="sparkSvg" viewBox="0 0 300 34" preserveAspectRatio="none">
-            <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#0a84ff" stop-opacity="0.3"/>
-                <stop offset="100%" stop-color="#0a84ff" stop-opacity="0"/>
-            </linearGradient></defs>
-            <path id="sparkArea" fill="url(#sg)" d="M0 34 L300 34 Z"/>
-            <path id="sparkLine" fill="none" stroke="#0a84ff" stroke-width="1.5" d="M0 34"/>
-        </svg>
-        <span class="spark-lbl" id="cpuCores">-- cores</span>
+    <div class="gauges">
+        <div class="gauge-card">
+            <svg width="78" height="78" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="6"/>
+                <circle id="ramRing" cx="40" cy="40" r="30" fill="none" stroke="#007AFF" stroke-width="6"
+                    stroke-dasharray="{CIRC}" stroke-dashoffset="{CIRC}" stroke-linecap="round"
+                    transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .8s ease,stroke .3s ease"/>
+                <text x="40" y="38" text-anchor="middle" fill="#1d1d1f" font-size="17" font-weight="600"
+                    font-family="-apple-system,sans-serif" id="ramRV">--%</text>
+                <text x="40" y="52" text-anchor="middle" fill="#8e8e93" font-size="8.5" font-weight="500"
+                    letter-spacing=".8" font-family="-apple-system,sans-serif">MEMORY</text>
+            </svg>
+            <span class="gauge-sub" id="ramSub">-- / -- GB</span>
+        </div>
+        <div class="gauge-card">
+            <svg width="78" height="78" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="6"/>
+                <circle id="tempRing" cx="40" cy="40" r="30" fill="none" stroke="#007AFF" stroke-width="6"
+                    stroke-dasharray="{CIRC}" stroke-dashoffset="{CIRC}" stroke-linecap="round"
+                    transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .8s ease,stroke .3s ease"/>
+                <text x="40" y="38" text-anchor="middle" fill="#1d1d1f" font-size="17" font-weight="600"
+                    font-family="-apple-system,sans-serif" id="tempRV">--</text>
+                <text x="40" y="52" text-anchor="middle" fill="#8e8e93" font-size="8.5" font-weight="500"
+                    letter-spacing=".8" font-family="-apple-system,sans-serif">THERMALS</text>
+            </svg>
+            <span class="gauge-sub" id="tempSub">Nominal</span>
+        </div>
+    </div>
+    <div class="card" style="padding:8px 12px">
+        <div class="pbar">
+            <span class="lb">{_IC['ssd']} Storage</span>
+            <div class="trk"><div class="fill g" id="ssdB" style="width:0%"></div></div>
+            <span class="vl" id="ssdV">--</span>
+        </div>
+        <div class="irow" id="batRow">
+            <span class="ic">{_IC['bat']}</span><span class="lb">Battery</span>
+            <span class="vl" id="batV">--</span>
+        </div>
+        <div class="irow">
+            <span class="ic">{_IC['net']}</span><span class="lb" id="netLbl">Network</span>
+            <span class="vl" id="netV">--</span>
+        </div>
+        <div class="irow">
+            <span class="ic">{_IC['clk']}</span><span class="lb">Uptime</span>
+            <span class="vl" id="uptime">--</span>
+        </div>
+    </div>
+    <div class="acts">
+        <button class="abtn" data-a="quick" onclick="doA(this)">{_IC['bolt']}<span>Optimize</span></button>
+        <button class="abtn" data-a="scan" onclick="doA(this)">{_IC['search']}<span>Scan</span></button>
+        <button class="abtn" data-a="clean" onclick="doA(this)">{_IC['trash']}<span>Clean</span></button>
     </div>
 </div>
 
-<!-- Gauges -->
-<div class="gauges">
-    <div class="gauge-card">
-        <svg width="78" height="78" viewBox="0 0 80 80">
-            <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="6"/>
-            <circle id="ramRing" cx="40" cy="40" r="30" fill="none" stroke="#30d158" stroke-width="6"
-                stroke-dasharray="{CIRC}" stroke-dashoffset="{CIRC}" stroke-linecap="round"
-                transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .8s ease,stroke .3s ease"/>
-            <text x="40" y="38" text-anchor="middle" fill="#f0f0f5" font-size="17" font-weight="600"
-                font-family="-apple-system,sans-serif" id="ramRV">--%</text>
-            <text x="40" y="52" text-anchor="middle" fill="#75757e" font-size="8.5" font-weight="500"
-                letter-spacing=".8" font-family="-apple-system,sans-serif">MEMORY</text>
-        </svg>
-        <span class="gauge-sub" id="ramSub">-- / -- GB</span>
+<!-- TOOLS -->
+<div id="tab-tools" class="tab-content" style="display:none">
+    <div class="sec"><h3>{_IC['gear']} Quick Toggles</h3></div>
+    <div class="toggles">
+        <button class="toggle" id="tgl-dark" onclick="doS('toggle_dark')">{_IC['moon']} Dark Mode</button>
+        <button class="toggle" onclick="doS('lock_screen')">{_IC['lock']} Lock Screen</button>
+        <button class="toggle" onclick="doS('screenshot')">{_IC['camera']} Screenshot</button>
+        <button class="toggle" onclick="doS('empty_trash')">{_IC['trash']} Empty Trash</button>
     </div>
-    <div class="gauge-card">
-        <svg width="78" height="78" viewBox="0 0 80 80">
-            <circle cx="40" cy="40" r="30" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="6"/>
-            <circle id="tempRing" cx="40" cy="40" r="30" fill="none" stroke="#30d158" stroke-width="6"
-                stroke-dasharray="{CIRC}" stroke-dashoffset="{CIRC}" stroke-linecap="round"
-                transform="rotate(-90 40 40)" style="transition:stroke-dashoffset .8s ease,stroke .3s ease"/>
-            <text x="40" y="38" text-anchor="middle" fill="#f0f0f5" font-size="17" font-weight="600"
-                font-family="-apple-system,sans-serif" id="tempRV">--</text>
-            <text x="40" y="52" text-anchor="middle" fill="#75757e" font-size="8.5" font-weight="500"
-                letter-spacing=".8" font-family="-apple-system,sans-serif">THERMALS</text>
-        </svg>
-        <span class="gauge-sub" id="tempSub">Nominal</span>
+    <div class="sec"><h3>{_IC['timer']} Stopwatch</h3></div>
+    <div class="timer-card">
+        <div class="timer-disp" id="timerDisp">00:00:00</div>
+        <div class="timer-btns">
+            <button class="timer-b primary" id="timerBtn" onclick="toggleTimer()">Start</button>
+            <button class="timer-b" onclick="resetTimer()">Reset</button>
+        </div>
+    </div>
+    <div class="sec"><h3>{_IC['clip']} Clipboard</h3><a onclick="doS('clip_clear')">Clear</a></div>
+    <div class="clips" id="clipList">
+        <div class="clip-empty">Clipboard history will appear here</div>
     </div>
 </div>
 
-<!-- Storage + System -->
-<div class="card" style="padding:8px 12px">
-    <div class="pbar">
-        <span class="lb">{_IC['ssd']} Storage</span>
-        <div class="trk"><div class="fill g" id="ssdB" style="width:0%"></div></div>
-        <span class="vl" id="ssdV">--</span>
-    </div>
-    <div class="irow" id="batRow">
-        <span class="ic">{_IC['bat']}</span><span class="lb">Battery</span>
-        <span class="vl" id="batV">--</span>
-    </div>
-    <div class="irow">
-        <span class="ic">{_IC['net']}</span><span class="lb">Network</span>
-        <span class="vl" id="netV">--</span>
-    </div>
-    <div class="irow">
-        <span class="ic">{_IC['clk']}</span><span class="lb">Uptime</span>
-        <span class="vl" id="uptime">--</span>
-    </div>
+<!-- APPS -->
+<div id="tab-apps" class="tab-content" style="display:none">
+    <div class="sec"><h3>Quick Launch</h3><a onclick="openPicker()">Edit</a></div>
+    <div class="apps-grid" id="appsGrid"></div>
 </div>
 
-<!-- Actions -->
-<div class="acts">
-    <button class="abtn" data-a="quick" onclick="doA(this)">{_IC['bolt']}<span>Optimize</span></button>
-    <button class="abtn" data-a="scan" onclick="doA(this)">{_IC['search']}<span>Scan</span></button>
-    <button class="abtn" data-a="clean" onclick="doA(this)">{_IC['trash']}<span>Clean</span></button>
+<div id="appPicker" class="picker">
+    <div class="picker-hdr">
+        <h3>Select Apps</h3>
+        <button class="picker-done" onclick="closePicker()">Done</button>
+    </div>
+    <div class="picker-grid" id="pickerGrid"></div>
 </div>
 
-<!-- Clipboard -->
-<div class="sec">
-    <h3>{_IC['clip']} Clipboard</h3>
-    <a onclick="doS('clip_clear')">Clear</a>
-</div>
-<div class="clips" id="clipList">
-    <div class="clip-empty">Clipboard history will appear here</div>
-</div>
-
-<div style="height:8px"></div>
-
-<!-- Quick Launch -->
-<div class="sec"><h3>{_IC['folder']} Quick Launch</h3></div>
-<div class="apps-row">{app_btns}</div>
-
-<!-- Footer -->
 <div class="ft">
     <a onclick="doS('prefs')">{_IC['gear']} Preferences</a>
     <a class="quit" onclick="doS('quit')">Quit</a>
 </div>
 
 <script>
-var cpuHist=[];var maxP=25;var circ={CIRC};
+var cpuHist=[],maxP=25,circ={CIRC};
+var allIcons={icons_json};
+var installedApps={installed_json};
+var selectedApps={selected_json};
+var timerRunning=false,timerSec=0,timerInt=null;
+
+function showTab(t){{
+    document.querySelectorAll('.tab-content').forEach(function(el){{el.style.display='none'}});
+    document.getElementById('tab-'+t).style.display='block';
+    document.querySelectorAll('.tab-btn').forEach(function(el){{el.classList.remove('active')}});
+    document.querySelector('[data-tab="'+t+'"]').classList.add('active');
+}}
 function doA(el){{var a=el.getAttribute('data-a');el.classList.add('running');
     window.webkit.messageHandlers.macboost.postMessage({{action:a}})}}
 function doS(a){{window.webkit.messageHandlers.macboost.postMessage({{action:a}})}}
-function openApp(n){{window.webkit.messageHandlers.macboost.postMessage({{action:'open_app',app:n}})}}
 function copyClip(i){{window.webkit.messageHandlers.macboost.postMessage({{action:'clip_copy',idx:i}})}}
 function bc(p){{return p<60?'g':p<80?'y':'r'}}
-function rc(p){{return p<60?'#30d158':p<80?'#ffd60a':'#ff453a'}}
-
-function actionDone(name,ok){{
-    var el=document.querySelector('[data-a="'+name+'"]');
-    if(el)el.classList.remove('running');
-}}
+function rc(p){{return p<60?'#007AFF':p<80?'#FF9500':'#FF3B30'}}
+function actionDone(name){{var el=document.querySelector('[data-a="'+name+'"]');if(el)el.classList.remove('running')}}
 
 function updateSparkline(cpu){{
     cpuHist.push(cpu);if(cpuHist.length>maxP)cpuHist.shift();
@@ -427,20 +538,17 @@ function updateSparkline(cpu){{
     document.getElementById('sparkLine').setAttribute('d',d);
     document.getElementById('sparkArea').setAttribute('d',d+' L'+pts[pts.length-1][0].toFixed(1)+','+h+' L0,'+h+' Z');
 }}
-
 function setRing(id,pct,mx){{
     var el=document.getElementById(id);
     el.style.strokeDashoffset=circ*(1-Math.min(pct,mx)/mx);
     el.setAttribute('stroke',rc(pct));
 }}
-
 function renderClips(clips){{
     var el=document.getElementById('clipList');
     if(!clips||!clips.length){{el.innerHTML='<div class="clip-empty">Clipboard history will appear here</div>';return}}
     var h='';
     for(var i=0;i<clips.length;i++){{
-        var c=clips[i];
-        var icCls=c.tp==='url'?'clip-ic url':'clip-ic';
+        var c=clips[i];var icCls=c.tp==='url'?'clip-ic url':'clip-ic';
         var ic=c.tp==='url'?'{_IC["net"]}':'{_IC["clip"]}';
         h+='<div class="clip-item" onclick="copyClip('+i+')">'
           +'<span class="'+icCls+'">'+ic+'</span>'
@@ -451,39 +559,84 @@ function renderClips(clips){{
     el.innerHTML=h;
 }}
 
+function toggleTimer(){{
+    if(timerRunning){{clearInterval(timerInt);timerRunning=false;
+        document.getElementById('timerBtn').textContent='Start';
+        document.getElementById('timerBtn').classList.add('primary');
+    }}else{{timerInt=setInterval(function(){{timerSec++;updTimerDisp()}},1000);
+        timerRunning=true;document.getElementById('timerBtn').textContent='Stop';
+        document.getElementById('timerBtn').classList.remove('primary');}}
+}}
+function resetTimer(){{clearInterval(timerInt);timerRunning=false;timerSec=0;updTimerDisp();
+    document.getElementById('timerBtn').textContent='Start';
+    document.getElementById('timerBtn').classList.add('primary');}}
+function updTimerDisp(){{
+    var h=Math.floor(timerSec/3600),m=Math.floor((timerSec%3600)/60),s=timerSec%60;
+    document.getElementById('timerDisp').textContent=
+        String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}}
+
+function renderApps(){{
+    var g=document.getElementById('appsGrid');var h='';
+    for(var i=0;i<selectedApps.length;i++){{
+        var n=selectedApps[i];var ic=allIcons[n];if(!ic)continue;
+        var short=n.replace('Google ','').replace('Visual Studio ','VS ').split(' ')[0];
+        h+='<div class="app-item" onclick="openApp(this.dataset.n)" data-n="'+n.replace(/"/g,'&quot;')+'">'
+          +'<img src="data:image/png;base64,'+ic+'"><span>'+short+'</span></div>';
+    }}
+    if(!h)h='<div style="grid-column:1/-1;text-align:center;font-size:11px;color:#aeaeb2;padding:16px">Tap Edit to add apps</div>';
+    g.innerHTML=h;
+}}
+function openApp(n){{window.webkit.messageHandlers.macboost.postMessage({{action:'open_app',app:n}})}}
+function openPicker(){{
+    var g=document.getElementById('pickerGrid');var h='';
+    for(var i=0;i<installedApps.length;i++){{
+        var n=installedApps[i];var ic=allIcons[n];if(!ic)continue;
+        var sel=selectedApps.indexOf(n)>=0?'sel':'';
+        var short=n.replace('Google ','').replace('Visual Studio ','VS ');
+        h+='<div class="picker-item '+sel+'" data-app="'+n.replace(/"/g,'&quot;')+'" onclick="toggleAppSel(this)">'
+          +'<img src="data:image/png;base64,'+ic+'"><span>'+short+'</span></div>';
+    }}
+    g.innerHTML=h;document.getElementById('appPicker').classList.add('show');
+}}
+function toggleAppSel(el){{
+    var name=el.dataset.app;var idx=selectedApps.indexOf(name);
+    if(idx>=0){{selectedApps.splice(idx,1);el.classList.remove('sel')}}
+    else{{selectedApps.push(name);el.classList.add('sel')}}
+}}
+function closePicker(){{
+    document.getElementById('appPicker').classList.remove('show');renderApps();
+    window.webkit.messageHandlers.macboost.postMessage({{action:'save_apps',apps:selectedApps}});
+}}
+
 function updateMetrics(d){{
     document.getElementById('cpuV').textContent=d.cpu.toFixed(1)+'%';
     document.getElementById('cpuCores').textContent=d.cpu_cores+' cores';
     updateSparkline(d.cpu);
-
     setRing('ramRing',d.ram_pct,100);
     document.getElementById('ramRV').textContent=d.ram_pct.toFixed(0)+'%';
     document.getElementById('ramSub').textContent=d.ram_used.toFixed(1)+' / '+d.ram_total.toFixed(0)+' GB';
-
     var t=d.temp||0;setRing('tempRing',Math.min(t,100),100);
     document.getElementById('tempRV').textContent=t?t.toFixed(0)+'\\u00B0':'--';
-    var ts=document.getElementById('tempSub');
-    ts.textContent=!t||t<60?'Nominal':t<80?'Warm':'Hot';
-
+    document.getElementById('tempSub').textContent=!t||t<60?'Nominal':t<80?'Warm':'Hot';
     document.getElementById('ssdV').textContent=d.ssd_free.toFixed(0)+' GB free';
-    var sb=document.getElementById('ssdB');
-    sb.style.width=d.ssd_pct+'%';sb.className='fill '+bc(d.ssd_pct);
-
+    var sb=document.getElementById('ssdB');sb.style.width=d.ssd_pct+'%';sb.className='fill '+bc(d.ssd_pct);
     var br=document.getElementById('batRow');
     if(d.bat_charge!==null){{br.style.display='flex';
         document.getElementById('batV').textContent=d.bat_charge.toFixed(0)+'%'+(d.bat_plugged?' charging':'')+(d.bat_cycles?' \\u00B7 '+d.bat_cycles+' cyc':'');
     }}else{{br.style.display='none'}}
-
-    document.getElementById('netV').textContent=d.net_up+' up \\u00B7 '+d.net_dn+' dn';
+    document.getElementById('netLbl').textContent=d.wifi||'Network';
+    document.getElementById('netV').textContent=d.net_up+' \\u2191 \\u00B7 '+d.net_dn+' \\u2193';
     document.getElementById('uptime').textContent=d.uptime;
-
-    var badge=document.getElementById('badge');var sub=document.getElementById('sub');var s=d.score||0;
-    if(s>=80){{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Healthy';badge.className='badge g';sub.textContent='All key metrics normal \\u00B7 v{version}';}}
-    else if(s>=60){{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Warning';badge.className='badge y';sub.textContent='Some metrics need attention \\u00B7 v{version}';}}
-    else{{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Critical';badge.className='badge r';sub.textContent='System needs optimization \\u00B7 v{version}';}}
-
+    var badge=document.getElementById('badge'),sub=document.getElementById('sub'),s=d.score||0;
+    if(s>=80){{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Healthy';badge.className='badge g';sub.textContent='All key metrics normal \\u00B7 v{version}'}}
+    else if(s>=60){{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Warning';badge.className='badge y';sub.textContent='Some metrics need attention \\u00B7 v{version}'}}
+    else{{badge.innerHTML='<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Critical';badge.className='badge r';sub.textContent='System needs optimization \\u00B7 v{version}'}}
     if(d.clips)renderClips(d.clips);
+    var dm=document.getElementById('tgl-dark');
+    if(d.dark_mode)dm.classList.add('active');else dm.classList.remove('active');
 }}
+renderApps();
 </script></body></html>"""
 
 
@@ -518,6 +671,10 @@ class MacBoostStatusBar(NSObject):
         self._net_recv_prev = 0
         self._clip_history = []
         self._last_clip_count = NSPasteboard.generalPasteboard().changeCount()
+        self._selected_apps = _load_selected_apps()
+
+        # Load real app icons
+        self._all_icons, self._installed_apps = _get_all_app_icons()
 
         # Status item
         self._statusItem = NSStatusBar.systemStatusBar().statusItemWithLength_(
@@ -528,14 +685,14 @@ class MacBoostStatusBar(NSObject):
         btn.setTarget_(self)
         btn.setAction_(objc.selector(self.togglePopover_, signature=b"v@:@"))
 
-        # Popover
+        # Popover — light frosted glass
         self._popover = NSPopover.alloc().init()
-        self._popover.setContentSize_(NSMakeSize(360, 650))
+        self._popover.setContentSize_(NSMakeSize(380, 580))
         self._popover.setBehavior_(1)
         self._popover.setAnimates_(True)
-        dark = NSAppearance.appearanceNamed_("NSAppearanceNameVibrantDark")
-        if dark:
-            self._popover.setAppearance_(dark)
+        light = NSAppearance.appearanceNamed_("NSAppearanceNameVibrantLight")
+        if light:
+            self._popover.setAppearance_(light)
 
         # WebView
         config = WKWebViewConfiguration.alloc().init()
@@ -544,11 +701,15 @@ class MacBoostStatusBar(NSObject):
 
         vc = NSViewController.alloc().init()
         self._webview = WKWebView.alloc().initWithFrame_configuration_(
-            NSMakeRect(0, 0, 360, 650), config)
+            NSMakeRect(0, 0, 380, 580), config)
         self._webview.setValue_forKey_(False, "drawsBackground")
 
         from macboost import __version__
-        self._webview.loadHTMLString_baseURL_(_build_html(_get_mac_name(), __version__), None)
+        html = _build_html(
+            _get_mac_name(), __version__,
+            self._all_icons, self._installed_apps, self._selected_apps,
+        )
+        self._webview.loadHTMLString_baseURL_(html, None)
         vc.setView_(self._webview)
         self._popover.setContentViewController_(vc)
 
@@ -588,7 +749,7 @@ class MacBoostStatusBar(NSObject):
                 self._collect_metrics()
             except Exception:
                 pass
-            time.sleep(4)
+            time.sleep(3)
 
     def _check_clipboard(self):
         pb = NSPasteboard.generalPasteboard()
@@ -653,9 +814,11 @@ class MacBoostStatusBar(NSObject):
             "bat_charge": bat.percent if bat else None,
             "bat_plugged": bat.power_plugged if bat else None,
             "bat_cycles": bat_cycles, "bat_condition": bat_cond,
-            "net_up": _bytes_human(sent_d / 5) + "/s",
-            "net_dn": _bytes_human(recv_d / 5) + "/s",
+            "net_up": _bytes_human(sent_d / 4) + "/s",
+            "net_dn": _bytes_human(recv_d / 4) + "/s",
             "score": score, "clips": clips,
+            "dark_mode": _is_dark_mode(),
+            "wifi": _get_wifi_ssid(),
         }
 
     # ── Actions ──
@@ -672,7 +835,7 @@ class MacBoostStatusBar(NSObject):
         elif action == "open_app":
             app = msg.get("app", "")
             if app:
-                subprocess.Popen(["open", "-a", app])
+                subprocess.Popen(["open", "-a", str(app)])
         elif action == "clip_copy":
             idx = msg.get("idx", -1)
             if isinstance(idx, (int, float)) and 0 <= int(idx) < len(self._clip_history):
@@ -687,6 +850,21 @@ class MacBoostStatusBar(NSObject):
             js = 'renderClips([])'
             self._webview.performSelectorOnMainThread_withObject_waitUntilDone_(
                 objc.selector(self._evalJS_, signature=b"v@:@"), js, False)
+        elif action == "save_apps":
+            apps = msg.get("apps")
+            if apps:
+                self._selected_apps = [str(a) for a in apps]
+                _save_selected_apps(self._selected_apps)
+        elif action == "toggle_dark":
+            subprocess.Popen(["osascript", "-e",
+                'tell app "System Events" to tell appearance preferences to set dark mode to not dark mode'])
+        elif action == "lock_screen":
+            subprocess.Popen(["pmset", "displaysleepnow"])
+        elif action == "screenshot":
+            subprocess.Popen(["screencapture", "-ic"])
+        elif action == "empty_trash":
+            subprocess.Popen(["osascript", "-e", 'tell app "Finder" to empty trash'])
+            _notify("MacBoost", "Trash emptied")
         elif action in ("quick", "scan", "clean"):
             threading.Thread(target=self._do_action, args=(action,), daemon=True).start()
 
