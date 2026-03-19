@@ -124,7 +124,6 @@ if [[ -n "$MACBOOST_BIN" ]]; then
     echo -e "    ${CYAN}macboost status${NC}           Ver Health Score"
     echo -e "    ${CYAN}macboost fix --all${NC}        Aplicar todas las optimizaciones"
     echo -e "    ${CYAN}macboost fix --all -p${NC}     Preview (ver qué se haría)"
-    echo -e "    ${CYAN}macboost dashboard${NC}        Dashboard web en localhost:7777"
     echo -e "    ${CYAN}macboost top${NC}              Top procesos por RAM"
     echo -e "    ${CYAN}macboost agents${NC}           Listar Launch Agents"
     echo -e "    ${CYAN}macboost power -p performance${NC}  Cambiar perfil de energía"

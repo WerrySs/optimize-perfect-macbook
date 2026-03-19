@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import webbrowser
 from typing import Optional
 
 import typer
@@ -122,17 +120,6 @@ def status():
         pass
 
 
-# === DASHBOARD ===
-@app.command()
-def dashboard():
-    """Abrir el dashboard web en el navegador."""
-    console.print("[cyan]Iniciando dashboard en http://localhost:7777...[/cyan]")
-    webbrowser.open("http://localhost:7777")
-
-    from macboost.dashboard.server import start_server
-    start_server()
-
-
 # === UNDO ===
 @undo_app.callback(invoke_without_command=True)
 def undo_default(
@@ -205,11 +192,10 @@ def power_default(
 # === MENUBAR ===
 @menubar_app.command("start")
 def menubar_start():
-    """Iniciar la menu bar app."""
-    console.print("[cyan]Iniciando MacBoost Menu Bar...[/cyan]")
+    """Iniciar la menu bar app como daemon (sobrevive al cierre de terminal)."""
     try:
-        from macboost.menubar.app import run_menubar
-        run_menubar()
+        from macboost.menubar.app import start_daemon
+        start_daemon()
     except ImportError:
         console.print("[red]Error: dependencias de menu bar no instaladas (rumps, pyobjc)[/red]")
 
@@ -218,10 +204,25 @@ def menubar_start():
 def menubar_stop():
     """Detener la menu bar app."""
     try:
-        subprocess.run(["pkill", "-f", "macboost.menubar"], capture_output=True)
-        console.print("[green]Menu bar app detenida[/green]")
-    except Exception:
-        console.print("[dim]No se encontró la menu bar app en ejecución[/dim]")
+        from macboost.menubar.app import stop_daemon
+        stop_daemon()
+    except ImportError:
+        console.print("[red]Error: dependencias de menu bar no instaladas[/red]")
+
+
+@menubar_app.command("status")
+def menubar_status_cmd():
+    """Ver estado de la menu bar app."""
+    try:
+        from macboost.menubar.app import daemon_status
+        info = daemon_status()
+        if info["running"]:
+            console.print(f"[bold green]⚡ Menu Bar activa[/bold green] (PID: {info['pid']})")
+        else:
+            console.print("[dim]Menu Bar no está en ejecución[/dim]")
+            console.print("[dim]Iniciar con: macboost menubar start[/dim]")
+    except ImportError:
+        console.print("[red]Error: dependencias de menu bar no instaladas[/red]")
 
 
 # === AUTO ===
