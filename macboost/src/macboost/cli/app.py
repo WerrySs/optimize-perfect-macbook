@@ -111,6 +111,16 @@ def status():
     st = orch.get_status()
     print_status(st)
 
+    # Chequeo de actualizaciones en background (no bloquea si no hay red)
+    try:
+        from macboost.core.updater import check_update
+        info = check_update()
+        if info["available"]:
+            console.print(f"\n[bold yellow]⬆ Nueva versión disponible: v{info['latest']}[/bold yellow]")
+            console.print("[dim]  Actualizar con: macboost update[/dim]")
+    except Exception:
+        pass
+
 
 # === DASHBOARD ===
 @app.command()
@@ -278,6 +288,68 @@ def health():
     console.print()
     score_data = calculate_health_score()
     print_health_score(score_data)
+
+
+# === VERSION ===
+@app.command("version")
+def version_cmd(
+    short: bool = typer.Option(False, "--short", help="Solo mostrar número de versión"),
+    check: bool = typer.Option(False, "--check", "-c", help="Verificar si hay actualizaciones"),
+):
+    """Mostrar versión de MacBoost y verificar actualizaciones."""
+    from macboost import __version__
+
+    if short:
+        console.print(__version__)
+        return
+
+    console.print(f"[bold cyan]⚡ MacBoost[/bold cyan] v{__version__}")
+
+    if check:
+        from macboost.core.updater import check_update
+        console.print("[dim]Verificando actualizaciones...[/dim]")
+        info = check_update()
+        if info["available"]:
+            console.print(f"\n[bold yellow]Nueva versión disponible: v{info['latest']}[/bold yellow]")
+            console.print(f"[dim]Versión actual: v{info['current']}[/dim]")
+            console.print(f"\n  Actualizar con: [cyan]macboost update[/cyan]")
+        else:
+            console.print(f"\n[green]✓ {info['message']}[/green]")
+
+
+# === UPDATE ===
+@app.command("update")
+def update_cmd(
+    force: bool = typer.Option(False, "--force", "-f", help="Forzar reinstalación aunque esté actualizado"),
+):
+    """Actualizar MacBoost a la última versión."""
+    from macboost import __version__
+    from macboost.core.updater import check_update, perform_update
+
+    print_header()
+    console.print(f"\n[dim]Versión actual: v{__version__}[/dim]")
+    console.print("[cyan]Verificando actualizaciones...[/cyan]\n")
+
+    info = check_update()
+
+    if not info["available"] and not force:
+        console.print(f"[green]✓ {info['message']}[/green]")
+        return
+
+    if info["available"]:
+        console.print(f"[bold yellow]Nueva versión disponible: v{info['latest']}[/bold yellow]")
+        confirm = typer.confirm("¿Actualizar ahora?")
+        if not confirm:
+            raise typer.Abort()
+
+    console.print("[cyan]Descargando e instalando...[/cyan]")
+    success, msg = perform_update(force=force)
+
+    if success:
+        console.print(f"\n[bold green]✓ {msg}[/bold green]")
+        console.print("[dim]Reinicia tu terminal para usar la nueva versión.[/dim]")
+    else:
+        console.print(f"\n[bold red]✗ {msg}[/bold red]")
 
 
 if __name__ == "__main__":

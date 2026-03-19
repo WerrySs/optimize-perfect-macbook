@@ -163,3 +163,17 @@ def api_metrics():
     if monitor:
         return monitor.collect_metrics()
     return {}
+
+
+@router.get("/version")
+def api_version():
+    """Versión actual y disponibilidad de actualizaciones."""
+    from macboost import __version__
+    from macboost.core.updater import check_update
+    info = check_update()
+    return {
+        "current": __version__,
+        "latest": info["latest"],
+        "update_available": info["available"],
+        "message": info["message"],
+    }

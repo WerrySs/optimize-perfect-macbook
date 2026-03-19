@@ -32,6 +32,7 @@ dependencies = [
     "rumps>=0.4.0",
     "pyobjc-framework-Cocoa>=10.0",
     "toml>=0.10.2",
+    "packaging>=23.0",
 ]
 
 [project.optional-dependencies]
@@ -46,8 +47,8 @@ dev = [
 macboost = "macboost.main:main"
 
 [project.urls]
-Homepage = "https://github.com/macboost/macboost"
-Repository = "https://github.com/macboost/macboost"
+Homepage = "https://github.com/WerrySs/optimize-perfect-macbook"
+Repository = "https://github.com/WerrySs/optimize-perfect-macbook"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/macboost"]
