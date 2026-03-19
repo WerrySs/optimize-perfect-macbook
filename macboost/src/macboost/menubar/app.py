@@ -86,7 +86,7 @@ class MacBoostMenuBar(rumps.App):
         self.header_item = rumps.MenuItem("⚡ MacBoost          Score: --")
         self.header_item.set_callback(None)
 
-        self.version_item = rumps.MenuItem("    v1.1.0")
+        self.version_item = rumps.MenuItem("    v1.1.1")
         self.version_item.set_callback(None)
 
         # Métricas
