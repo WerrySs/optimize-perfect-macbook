@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import platform
@@ -38,6 +39,8 @@ from macboost.core.orchestrator import Orchestrator
 
 PID_FILE = APP_DIR / "menubar.pid"
 APPS_CONFIG = APP_DIR / "quick_launch.json"
+CLIP_FILE = APP_DIR / "clipboard.enc"
+NOTES_FILE = APP_DIR / "notes.json"
 
 AVAILABLE_APPS = [
     "Finder", "Safari", "Google Chrome", "Firefox", "Arc",
@@ -172,6 +175,63 @@ def _save_selected_apps(apps: list[str]):
     APPS_CONFIG.write_text(json.dumps(apps))
 
 
+# ── Clipboard encryption ─────────────────────────────────────────────────
+
+def _get_fernet():
+    from cryptography.fernet import Fernet
+    try:
+        r = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                           capture_output=True, text=True, timeout=3)
+        hw_uuid = "macboost-default"
+        for line in r.stdout.splitlines():
+            if "IOPlatformUUID" in line:
+                hw_uuid = line.split('"')[-2]
+                break
+    except Exception:
+        hw_uuid = "macboost-default"
+    key = base64.urlsafe_b64encode(hashlib.sha256(hw_uuid.encode()).digest())
+    return Fernet(key)
+
+
+def _save_clipboard_encrypted(history: list):
+    try:
+        f = _get_fernet()
+        data = json.dumps(history).encode()
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        CLIP_FILE.write_bytes(f.encrypt(data))
+    except Exception:
+        pass
+
+
+def _load_clipboard_encrypted() -> list:
+    if not CLIP_FILE.exists():
+        return []
+    try:
+        f = _get_fernet()
+        return json.loads(f.decrypt(CLIP_FILE.read_bytes()).decode())
+    except Exception:
+        return []
+
+
+# ── Notes persistence ────────────────────────────────────────────────────
+
+def _save_notes(notes: list):
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        NOTES_FILE.write_text(json.dumps(notes))
+    except Exception:
+        pass
+
+
+def _load_notes() -> list:
+    if not NOTES_FILE.exists():
+        return []
+    try:
+        return json.loads(NOTES_FILE.read_text())
+    except Exception:
+        return []
+
+
 # ── App Icons ────────────────────────────────────────────────────────────
 
 def _get_app_icon_b64(app_name: str, size: int = 32) -> str:
@@ -225,6 +285,7 @@ _IC = {
     "lock": '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="3" y="7" width="10" height="7" rx="2"/><path d="M5 7V5a3 3 0 016 0v2"/></svg>',
     "camera": '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.5" y="4" width="13" height="9" rx="2"/><circle cx="8" cy="8.5" r="2.5"/><path d="M5.5 4L6.5 2h3l1 2"/></svg>',
     "timer": '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1"/><path d="M6.5 1h3"/><path d="M8 1v2"/></svg>',
+    "pencil": '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3z"/><path d="M9.5 3.5l3 3"/></svg>',
 }
 
 CIRC = 188.5  # 2*pi*30
@@ -349,6 +410,15 @@ body{{
 .clip-item:hover .clip-copy{{opacity:1}}
 .clip-empty{{padding:16px;text-align:center;font-size:11px;color:#aeaeb2}}
 
+.note-input{{display:none;margin-bottom:8px}}
+.note-ta{{width:100%;height:56px;border-radius:10px;border:1px solid rgba(0,0,0,0.08);
+    padding:8px 10px;font-size:12px;font-family:inherit;resize:none;
+    background:rgba(255,255,255,0.6);color:#1d1d1f;outline:none}}
+.note-ta:focus{{border-color:rgba(0,122,255,0.4)}}
+.note-acts{{display:flex;gap:6px;justify-content:flex-end;margin-top:6px}}
+.note-del{{color:#aeaeb2;cursor:pointer;flex-shrink:0;transition:color .15s}}
+.note-del:hover{{color:#FF3B30}}
+
 .apps-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}}
 .app-item{{display:flex;flex-direction:column;align-items:center;gap:3px;
     padding:8px 4px;border-radius:12px;cursor:pointer;transition:all .15s;border:1px solid transparent}}
@@ -374,11 +444,6 @@ body{{
 .picker-item img{{width:36px;height:36px;border-radius:8px}}
 .picker-item span{{font-size:9px;color:#636366;text-align:center;line-height:1.2}}
 
-.ft{{display:flex;justify-content:space-between;padding-top:4px}}
-.ft a{{color:#007AFF;font-size:11px;cursor:pointer;text-decoration:none;
-    display:flex;align-items:center;gap:4px;font-weight:500}}
-.ft a svg{{color:#007AFF}}.ft a:hover{{text-decoration:underline}}
-.ft .quit{{color:#FF3B30}}.ft .quit svg{{color:#FF3B30}}
 </style></head><body>
 
 <div class="hdr">
@@ -487,6 +552,19 @@ body{{
     <div class="clips" id="clipList">
         <div class="clip-empty">Clipboard history will appear here</div>
     </div>
+
+    <div style="height:8px"></div>
+    <div class="sec"><h3>{_IC['pencil']} Notes</h3><a onclick="showNoteInput()">Add</a></div>
+    <div class="note-input" id="noteInput">
+        <textarea class="note-ta" id="noteText" placeholder="Write a note..."></textarea>
+        <div class="note-acts">
+            <button class="timer-b" onclick="cancelNote()">Cancel</button>
+            <button class="timer-b primary" onclick="saveNote()">Save</button>
+        </div>
+    </div>
+    <div class="clips" id="notesList" style="max-height:120px">
+        <div class="clip-empty">No notes yet</div>
+    </div>
 </div>
 
 <!-- APPS -->
@@ -503,10 +581,6 @@ body{{
     <div class="picker-grid" id="pickerGrid"></div>
 </div>
 
-<div class="ft">
-    <a onclick="doS('prefs')">{_IC['gear']} Preferences</a>
-    <a class="quit" onclick="doS('quit')">Quit</a>
-</div>
 
 <script>
 var cpuHist=[],maxP=25,circ={CIRC};
@@ -576,6 +650,29 @@ function updTimerDisp(){{
         String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }}
 
+/* ── Notes ── */
+var notes=[];
+function showNoteInput(){{document.getElementById('noteInput').style.display='block';document.getElementById('noteText').focus()}}
+function cancelNote(){{document.getElementById('noteInput').style.display='none';document.getElementById('noteText').value=''}}
+function saveNote(){{
+    var t=document.getElementById('noteText').value.trim();if(!t)return;
+    window.webkit.messageHandlers.macboost.postMessage({{action:'add_note',text:t}});
+    cancelNote();
+}}
+function deleteNote(i){{window.webkit.messageHandlers.macboost.postMessage({{action:'delete_note',idx:i}})}}
+function renderNotes(nn){{
+    notes=nn||notes;var el=document.getElementById('notesList');
+    if(!notes.length){{el.innerHTML='<div class="clip-empty">No notes yet</div>';return}}
+    var h='';
+    for(var i=0;i<notes.length;i++){{
+        h+='<div class="clip-item">'
+          +'<span class="clip-txt">'+notes[i].text.replace(/</g,'&lt;')+'</span>'
+          +'<span class="clip-time">'+notes[i].t+'</span>'
+          +'<span class="note-del" onclick="deleteNote('+i+')">{_IC["trash"]}</span></div>';
+    }}
+    el.innerHTML=h;
+}}
+
 function renderApps(){{
     var g=document.getElementById('appsGrid');var h='';
     for(var i=0;i<selectedApps.length;i++){{
@@ -635,6 +732,7 @@ function updateMetrics(d){{
     if(d.clips)renderClips(d.clips);
     var dm=document.getElementById('tgl-dark');
     if(d.dark_mode)dm.classList.add('active');else dm.classList.remove('active');
+    if(d.notes)renderNotes(d.notes);
 }}
 renderApps();
 </script></body></html>"""
@@ -669,9 +767,10 @@ class MacBoostStatusBar(NSObject):
         self._running = True
         self._net_sent_prev = 0
         self._net_recv_prev = 0
-        self._clip_history = []
+        self._clip_history = _load_clipboard_encrypted()
         self._last_clip_count = NSPasteboard.generalPasteboard().changeCount()
         self._selected_apps = _load_selected_apps()
+        self._notes = _load_notes()
 
         # Load real app icons
         self._all_icons, self._installed_apps = _get_all_app_icons()
@@ -770,8 +869,9 @@ class MacBoostStatusBar(NSObject):
             "time": time.time(),
             "type": "url" if is_url else "text",
         })
-        if len(self._clip_history) > 20:
+        if len(self._clip_history) > 50:
             self._clip_history.pop()
+        _save_clipboard_encrypted(self._clip_history)
 
     def _collect_metrics(self):
         cpu = psutil.cpu_percent(interval=1)
@@ -817,6 +917,7 @@ class MacBoostStatusBar(NSObject):
             "net_up": _bytes_human(sent_d / 4) + "/s",
             "net_dn": _bytes_human(recv_d / 4) + "/s",
             "score": score, "clips": clips,
+            "notes": [{"text": n["text"], "t": _time_ago(n["ts"])} for n in self._notes[:30]],
             "dark_mode": _is_dark_mode(),
             "wifi": _get_wifi_ssid(),
         }
@@ -847,9 +948,20 @@ class MacBoostStatusBar(NSObject):
                 _notify("MacBoost", "Copied to clipboard")
         elif action == "clip_clear":
             self._clip_history.clear()
+            _save_clipboard_encrypted(self._clip_history)
             js = 'renderClips([])'
             self._webview.performSelectorOnMainThread_withObject_waitUntilDone_(
                 objc.selector(self._evalJS_, signature=b"v@:@"), js, False)
+        elif action == "add_note":
+            text = msg.get("text", "")
+            if text:
+                self._notes.insert(0, {"text": str(text), "ts": time.time()})
+                _save_notes(self._notes)
+        elif action == "delete_note":
+            idx = msg.get("idx", -1)
+            if isinstance(idx, (int, float)) and 0 <= int(idx) < len(self._notes):
+                self._notes.pop(int(idx))
+                _save_notes(self._notes)
         elif action == "save_apps":
             apps = msg.get("apps")
             if apps:
